@@ -21,7 +21,7 @@ function parseAdStructures(bytes: number[]): ADStructure[] {
     return results;
 }
 
-function decodeProfile(bytes: number[]): BleProfile | undefined {
+export function decodeProfile(bytes: number[]): BleProfile | undefined {
     const structures = parseAdStructures(bytes);
 
     for (const structure of structures) {
