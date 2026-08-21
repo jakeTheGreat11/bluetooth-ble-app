@@ -15,70 +15,65 @@ export function LearnScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Learn</Text>
       <Text style={styles.intro}>
-        Short notes on how BLE advertising and the “pairing popup” trick work.
-        Use this as a lab notebook, not as a how-to for bothering strangers.
+        Lab notes on BLE advertising and pairing-popup spam. Use on your own
+        devices or with consent only.
       </Text>
 
       <Section title="1. Central vs peripheral">
-        {`A peripheral broadcasts small advertising packets. A central (your phone’s Bluetooth stack, or our Scan tab) listens for those packets.
+        {`A peripheral broadcasts advertising packets. A central listens.
 
-No connection is required to see an advertisement. That’s why a fake “AirPods nearby” popup can appear without anyone pairing.`}
+Popups do not require a completed pairing. The phone’s OS reacts to familiar advertisement bytes.`}
       </Section>
 
-      <Section title="2. Advertising data (AD) = TLV chunks">
-        {`Each advertisement is a list of chunks stacked back-to-back:
+      <Section title="2. 31-byte legacy limit (why our first attempt failed)">
+        {`Legacy BLE ads are max 31 bytes total.
 
-[length][type][value] [length][type][value] …
+Working Continuity spam sends ONLY manufacturer data (no service UUID, no device name).
 
-• length — how many bytes follow (type + value)
-• type — what kind of data (e.g. 0xFF = Manufacturer Specific Data, 0x16 = Service Data)
-• value — the actual bytes
+react-native-ble-advertiser always adds a 128-bit service UUID, so AirPods-sized payloads fail with DATA_TOO_LARGE or never look like Continuity.
 
-Our decode.ts walks this structure and tries to match known profiles.`}
+Broadcast Lab now uses a custom ContinuityAdvertiser native module (manufacturer-data only).`}
       </Section>
 
-      <Section title="3. Why the pairing popup fires">
-        {`Phones watch for familiar advertisement patterns while Bluetooth is on:
+      <Section title="3. Apple Continuity that still works well">
+        {`Nearby Action (type 0x0F) — short 7-byte payload after Apple company ID 0x004C:
 
-• Apple Continuity / Proximity Pairing (company ID 0x004C) — AirPods-style cards
-• Samsung Easy Setup (company ID 0x0075) — Galaxy Buds-style cards
-• Google Fast Pair (service UUID 0xFE2C) — Android Fast Pair cards
+0x0F, 0x05, flags, action, rand, rand, rand
 
-If the bytes look like a real accessory, the OS may show a setup UI. The pattern is public; the OS is just trusting the advertisement.`}
+Examples: Setup New iPhone (0x09), AppleTV / Watch / HomePod actions.
+
+Proximity Pairing (0x07, AirPods) is longer and more often rate-limited. We keep it for study/decode, not as the primary broadcast.`}
       </Section>
 
-      <Section title="4. Profiles in this app">
-        {`profiles.ts is a reference list of those byte patterns. The same list is used two ways:
+      <Section title="4. Samsung Easy Setup">
+        {`Company ID 0x0075. Public tools use a Buds template plus many device-ID variants (Flipper / Bluetooth-LE-Spam).
 
-• Scan + decode — recognize nearby ads that match a profile
-• Broadcast Lab — replay a manufacturer profile on Android
-
-Accessories (AirPods, Buds, Beats, etc.) are what we model. Phones/tablets are usually the receivers of the popup, not the fake identity we broadcast.`}
+Popups target Samsung phones, not iPhones. We include several Buds/Buds2 color variants from that public list.`}
       </Section>
 
-      <Section title="5. Broadcast is not targeted">
-        {`Starting Broadcast Lab does not send a message to one phone you picked from a list. It advertises to everyone in radio range with Bluetooth scanning on.
+      <Section title="5. Who sees what">
+        {`• Apple Continuity → test on an iPhone/iPad (BT on)
+• Samsung Easy Setup → test on a Samsung Android
+• Google Fast Pair → often patched on modern Android
 
-That’s why this app has a separate Broadcast tab instead of “attack this device.”`}
+Broadcasting Apple packets will not make another Android show an AirPods card.`}
       </Section>
 
-      <Section title="6. Why iOS can’t run Broadcast Lab">
-        {`Apple’s CoreBluetooth API lets apps advertise a local name and service UUIDs, but not custom manufacturer data. The popup trick needs that manufacturer payload, so third-party iOS apps can’t do this broadcast.
+      <Section title="6. Rotation and random auth tags">
+        {`iOS may ignore identical repeats. Real spam tools re-randomize the 3-byte auth tag and rotate actions.
 
-Android’s BluetoothLeAdvertiser allows manufacturer data, so Broadcast Lab is Android-only. iOS can still scan and learn.`}
+Use “Rotate all” in Broadcast Lab to cycle profiles about once per second.`}
       </Section>
 
-      <Section title="7. Mitigations (defensive side)">
-        {`• Turn Bluetooth off when you don’t need it
-• Keep the OS updated (vendors rate-limit or patch popup spam over time)
-• Don’t approve unexpected pairing cards
-• Treat unsolicited setup popups as a signal someone nearby may be advertising fake accessory packets`}
+      <Section title="7. Control test">
+        {`If our app still shows nothing, install Bluetooth-LE-Spam (F-Droid/GitHub) on the same Android sender and test against your iPhone.
+
+• That works, ours doesn’t → our packet/settings bug
+• Neither works → iOS version, distance, BT off, or OS cooldowns`}
       </Section>
 
       <Section title="8. Responsible use">
-        {`Only broadcast against devices you own, or with clear consent from everyone nearby. Spamming strangers in public is a nuisance and may be unlawful depending on where you are.
-
-This project exists to study the protocol and the OS behavior — not to harass people.`}
+        {`Only broadcast against devices you own, or with clear consent from everyone nearby.`}
       </Section>
     </ScrollView>
   );
