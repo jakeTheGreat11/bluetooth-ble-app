@@ -10,8 +10,11 @@ import {
 } from 'react-native';
 import {
   getBroadcastableProfiles,
+  startAppleSpam,
   startBroadcast,
   startRotatingBroadcast,
+  startSamsungSpam,
+  startSingleActionSpam,
   stopBroadcast,
 } from '../ble/advertiser';
 import { ManufacturerProfile } from '../ble/profiles';
@@ -29,7 +32,9 @@ async function requestAdvertisePermission(): Promise<boolean> {
 
 export function SpamScreen() {
   const [selectedId, setSelectedId] = useState(PROFILES[0]?.id ?? null);
-  const [mode, setMode] = useState<'idle' | 'single' | 'rotate'>('idle');
+  const [mode, setMode] = useState<
+    'idle' | 'single' | 'apple' | 'samsung' | 'mix' | 'pulse'
+  >('idle');
   const [statusLabel, setStatusLabel] = useState('Idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -39,41 +44,94 @@ export function SpamScreen() {
     };
   }, []);
 
-  const selected =
-    PROFILES.find((p) => p.id === selectedId) ?? null;
+  const selected = PROFILES.find((p) => p.id === selectedId) ?? null;
+  const busy = mode !== 'idle';
+
+  async function withPermission(run: () => Promise<void>) {
+    setErrorMessage(null);
+    const ok = await requestAdvertisePermission();
+    if (!ok) {
+      setErrorMessage('BLUETOOTH_ADVERTISE permission not granted');
+      return;
+    }
+    await run();
+  }
 
   async function handleStartSingle() {
     if (!selected) return;
     try {
-      setErrorMessage(null);
-      const ok = await requestAdvertisePermission();
-      if (!ok) {
-        setErrorMessage('BLUETOOTH_ADVERTISE permission not granted');
-        return;
-      }
-      await startBroadcast(selected);
-      setMode('single');
-      setStatusLabel(`Broadcasting: ${selected.label}`);
+      await withPermission(async () => {
+        await startBroadcast(selected);
+        setMode('single');
+        setStatusLabel(`Holding: ${selected.label}`);
+      });
     } catch (e) {
       setMode('idle');
       setErrorMessage(e instanceof Error ? e.message : 'Failed to start');
     }
   }
 
-  async function handleStartRotate() {
+  async function handleAppleSpam() {
     try {
-      setErrorMessage(null);
-      const ok = await requestAdvertisePermission();
-      if (!ok) {
-        setErrorMessage('BLUETOOTH_ADVERTISE permission not granted');
-        return;
-      }
-      await startRotatingBroadcast(1000);
-      setMode('rotate');
-      setStatusLabel('Rotating Apple + Samsung profiles (1s)');
+      await withPermission(async () => {
+        await startAppleSpam({
+          onProfile: (p) => setStatusLabel(`Apple spam → ${p.label}`),
+        });
+        setMode('apple');
+        setStatusLabel('Apple spam running (stop→gap→next)');
+      });
+    } catch (e) {
+      setMode('idle');
+      setErrorMessage(e instanceof Error ? e.message : 'Failed to start Apple spam');
+    }
+  }
+
+  async function handleSamsungSpam() {
+    try {
+      await withPermission(async () => {
+        await startSamsungSpam({
+          onProfile: (p) => setStatusLabel(`Samsung spam → ${p.label}`),
+        });
+        setMode('samsung');
+        setStatusLabel('Samsung spam running');
+      });
+    } catch (e) {
+      setMode('idle');
+      setErrorMessage(e instanceof Error ? e.message : 'Failed to start Samsung spam');
+    }
+  }
+
+  async function handleMixRotate() {
+    try {
+      await withPermission(async () => {
+        await startRotatingBroadcast(500, {
+          onProfile: (p) => setStatusLabel(`Mix → ${p.label}`),
+        });
+        setMode('mix');
+        setStatusLabel('Mix rotate running');
+      });
     } catch (e) {
       setMode('idle');
       setErrorMessage(e instanceof Error ? e.message : 'Failed to rotate');
+    }
+  }
+
+  async function handlePulseSelected() {
+    if (!selected || selected.advertiseMode !== 'continuity-nearby-action') {
+      setErrorMessage('Pick an Apple Nearby Action profile for pulse mode');
+      return;
+    }
+    try {
+      await withPermission(async () => {
+        await startSingleActionSpam(selected, {
+          onProfile: (p) => setStatusLabel(`Pulsing ${p.label} (new auth tag)`),
+        });
+        setMode('pulse');
+        setStatusLabel(`Pulsing: ${selected.label}`);
+      });
+    } catch (e) {
+      setMode('idle');
+      setErrorMessage(e instanceof Error ? e.message : 'Failed to pulse');
     }
   }
 
@@ -89,26 +147,23 @@ export function SpamScreen() {
         <Text style={styles.title}>Broadcast Lab</Text>
         <Text style={styles.body}>
           iOS blocks third-party apps from broadcasting manufacturer-specific BLE
-          data (CoreBluetooth). Use an Android phone as the sender. Test Apple
-          Continuity popups on a nearby iPhone; Samsung Easy Setup on a Samsung
-          phone.
+          data (CoreBluetooth). Use an Android phone as the sender.
         </Text>
       </View>
     );
   }
 
-  const busy = mode !== 'idle';
-
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Broadcast Lab</Text>
       <Text style={styles.warning}>
-        Broadcasts to anyone nearby with Bluetooth scanning on — not one selected
-        phone. Apple profiles → test on an iPhone. Samsung profiles → test on a
-        Samsung phone. Only use on your own devices or with consent.
+        Spam modes stop→gap→start each packet (like Bluetooth-LE-Spam). iPhone may
+        still cool down after one popup per action — lock/unlock the iPhone or
+        dismiss the card to see more. “Join This AppleTV?” often reappears better
+        than others.
       </Text>
 
-      <Text style={styles.section}>Pick a profile (for Start single)</Text>
+      <Text style={styles.section}>Pick a profile</Text>
       <FlatList
         data={PROFILES}
         keyExtractor={(item) => item.id}
@@ -133,18 +188,24 @@ export function SpamScreen() {
         </Pressable>
       ) : (
         <View style={styles.actions}>
-          <Pressable
-            onPress={handleStartSingle}
-            style={styles.button}
-            disabled={!selected}
-          >
-            <Text style={styles.buttonText}>Start selected</Text>
+          <Pressable onPress={handleAppleSpam} style={styles.button}>
+            <Text style={styles.buttonText}>Spam Apple (fast cycle)</Text>
+          </Pressable>
+          <Pressable onPress={handleSamsungSpam} style={[styles.button, styles.secondary]}>
+            <Text style={styles.buttonText}>Spam Samsung</Text>
+          </Pressable>
+          <Pressable onPress={handlePulseSelected} style={[styles.button, styles.secondary]}>
+            <Text style={styles.buttonText}>Pulse selected Apple action</Text>
+          </Pressable>
+          <Pressable onPress={handleMixRotate} style={[styles.button, styles.secondary]}>
+            <Text style={styles.buttonText}>Mix rotate</Text>
           </Pressable>
           <Pressable
-            onPress={handleStartRotate}
+            onPress={handleStartSingle}
             style={[styles.button, styles.secondary]}
+            disabled={!selected}
           >
-            <Text style={styles.buttonText}>Rotate all (1s)</Text>
+            <Text style={styles.buttonText}>Hold selected (no cycle)</Text>
           </Pressable>
         </View>
       )}
@@ -158,13 +219,13 @@ const styles = StyleSheet.create({
   warning: { marginBottom: 16, color: '#8a4b00', lineHeight: 20 },
   body: { lineHeight: 20 },
   section: { fontWeight: 'bold', marginBottom: 8 },
-  list: { flexGrow: 0, maxHeight: 300, marginBottom: 12 },
+  list: { flexGrow: 0, maxHeight: 220, marginBottom: 12 },
   row: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
   rowSelected: { backgroundColor: '#e8f1ff' },
   rowTitle: { fontWeight: '600' },
   meta: { color: '#666', fontSize: 12, marginTop: 2 },
   status: { marginBottom: 12, color: '#666' },
-  actions: { gap: 10 },
+  actions: { gap: 8 },
   button: {
     backgroundColor: '#007AFF',
     padding: 14,

